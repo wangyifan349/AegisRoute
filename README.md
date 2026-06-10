@@ -414,36 +414,41 @@ This layout separates proxy responsibilities while still using asynchronous netw
 - Use this software only on systems and networks where you have permission.
 
 ---
-
 ## ☕ Support AegisRoute
 
-If **AegisRoute** helps you, saves you time, or gives you a useful starting point for your own proxy project, you can support its development with a small donation.
+If **AegisRoute** has been useful to you, please consider supporting the project.
 
-No large contribution is needed — even buying me a coffee is greatly appreciated. ☕
-Your support helps keep the project maintained, improved, and open to everyone. 🚀
+Building and maintaining networking software requires a significant amount of time, research, testing, debugging, and long-term maintenance.
+Features such as HTTP, HTTPS CONNECT, SOCKS5, TCP/UDP forwarding, encryption, protocol compatibility,and cross-platform support all require continuous development and refinement.
 
+AegisRoute is developed as an open-source project, and every contribution helps support future improvements, new features, bug fixes, documentation, testing, and ongoing maintenance.
+If you would like to support the project, even the equivalent of a coffee is sincerely appreciated. ☕❤️
 ---
-### ₿ Bitcoin
+### ⚡ Bitcoin (BTC)
 ```text
 bc1qxqfhumpqtnxrznkx9r4xsp8m6zsedtgusjns7p
 ```
-### 💎 Ethereum
+### 🌞 Solana (SOL)
+```text
+B7N4e3KG9zWQBwMrtydS1B9wVBp2w62fAdryZdxAMBiz
+```
+### 💎 Ethereum (ETH)
 ```text
 0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
 ```
-### 🟡 BNB Smart Chain
+### 🟡 BNB Smart Chain (BNB)
 ```text
 0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
 ```
 ### 💵 USDT
+
 ```text
 0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
 ```
 ---
-⭐ If you like this project, please consider giving it a star on GitHub.
-☕ If you find it useful, buying me a coffee would mean a lot.
-Thank you for supporting open-source work.❤️
-
+⭐ If you enjoy the project, please consider giving the repository a star and sharing it with others.
+🙏 Your support, encouragement, and contributions are greatly appreciated and help keep AegisRoute active and evolving.
+Thank you for supporting open-source software.
 
 ## 📄 License
 
