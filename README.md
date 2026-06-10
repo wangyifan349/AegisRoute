@@ -467,10 +467,9 @@ Thank you for supporting open-source software.
 
 ## 📄 License
 
-AegisRoute is licensed under the **GNU General Public License version 3 or later**.
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
 
-See the `LICENSE` file for the full GNU GPLv3 license text.
+See the `LICENSE` file for the full license text.
 
 ```text
-SPDX-License-Identifier: GPL-3.0-or-later
-```
+SPDX-License-Identifier: GPL-3.0
