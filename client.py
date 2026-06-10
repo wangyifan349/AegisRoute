@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0
 """
-client.py
-
-AegisRoute interactive encrypted proxy client.
-
+AegisRoute Client
+Copyright (C) 2026
+This file is part of AegisRoute.
+AegisRoute is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License version 3 as published by the
+Free Software Foundation.
+AegisRoute is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See the GNU General Public License v3.0 for more details.
+Project:
+    https://github.com/wangyifan349/AegisRoute
 Install dependency:
     pip install cryptography
-
 Run:
     python client.py
 """
-
 import asyncio
 import functools
 import getpass
@@ -684,18 +689,18 @@ async def run_udp_relay(config: dict, event_logger: EventLogger) -> None:
 
 
 def read_runtime_config() -> dict:
-    print("请输入服务器信息。本客户端不会把服务器地址、端口或密码保存到本地。")
+    print("Enter server information. This client does not store the server address, port, or password locally.")
 
-    server_host = input("服务器 IP 或域名：").strip()          # Remote server host
-    server_port_text = input("服务器端口：").strip()           # Remote server port text
-    password = getpass.getpass("通信密码：").strip()           # Hidden password input
+    server_host = input("Server IP or domain: ").strip()          # Remote server host
+    server_port_text = input("Server port: ").strip()           # Remote server port text
+    password = getpass.getpass("Password: ").strip()           # Hidden password input
 
     if not server_host:
-        raise SystemExit("服务器地址不能为空")
+        raise SystemExit("Server address cannot be empty.")
     if not server_port_text:
-        raise SystemExit("服务器端口不能为空")
+        raise SystemExit("Server port cannot be empty.")
     if not password:
-        raise SystemExit("密码不能为空")
+        raise SystemExit("Password cannot be empty.")
 
     config = {}                                                # Runtime-only client configuration
     config["server_host"] = server_host                       # Remote server host in memory only
@@ -715,23 +720,20 @@ def ask_yes_no(prompt_text: str, default_value: bool = False) -> bool:
             return True
         if answer == "no" or answer == "n":
             return False
-        print("请输入 yes 或 no。")
-
+        print("Please enter yes or no.")
 
 def thread_entry(coroutine) -> None:
     asyncio.run(coroutine)                                     # Run one event loop per thread
-
 
 def run_asyncio_thread(name: str, coroutine) -> threading.Thread:
     thread = threading.Thread(target=thread_entry, args=(coroutine,), name=name, daemon=True)  # Worker thread
     thread.start()
     return thread
 
-
 def main() -> None:
     print("AegisRoute Client")
     config = read_runtime_config()                              # Read runtime-only server configuration
-    save_records = ask_yes_no("是否保留客户端记录到 client.log？", False)  # Log option
+    save_records = ask_yes_no("Keep client records in client.log?", False)  # Log option
     event_logger = EventLogger(save_records, CLIENT_LOG_FILE)  # Optional file logger
 
     event_logger.log("client start without saved secrets")
@@ -745,29 +747,25 @@ def main() -> None:
     )                                                           # HTTPS CONNECT worker
     socks_thread = run_asyncio_thread("aegisroute-socks5-server", run_socks5_server(config, event_logger))  # SOCKS TCP worker
     udp_thread = run_asyncio_thread("aegisroute-udp-relay", run_udp_relay(config, event_logger))  # SOCKS UDP worker
-
-    print("\n客户端已启动，代理端口如下：")
-    print(f"  HTTP  代理：{HTTP_PROXY_HOST}:{HTTP_PROXY_PORT}")
-    print(f"  HTTPS 代理：{HTTPS_PROXY_HOST}:{HTTPS_PROXY_PORT}  通过 CONNECT 支持")
+    print("\nClient started. Proxy endpoints:")
+    print(f"  HTTP Proxy  : {HTTP_PROXY_HOST}:{HTTP_PROXY_PORT}")
+    print(f"  HTTPS Proxy : {HTTPS_PROXY_HOST}:{HTTPS_PROXY_PORT}  CONNECT is supported")
     print(f"  SOCKS5 TCP：{SOCKS5_HOST}:{SOCKS5_PORT}")
     print(f"  SOCKS5 UDP：{SOCKS5_HOST}:{SOCKS5_PORT}")
-    print(f"  记录: {'client.log' if save_records else '不保留'}")
-    print("  敏感信息: 不保存服务器地址、服务器端口或密码")
-    print("\n浏览器/系统代理推荐填写：")
+    print(f"  Records     : {'client.log' if save_records else 'not kept'}")
+    print("  Secrets     : server address, server port, and password are not stored")
+    print("\nRecommended browser or system proxy settings:")
     print(f"  HTTP proxy  = {HTTP_PROXY_HOST}:{HTTP_PROXY_PORT}")
     print(f"  HTTPS proxy = {HTTPS_PROXY_HOST}:{HTTPS_PROXY_PORT}")
     print(f"  SOCKS5      = {SOCKS5_HOST}:{SOCKS5_PORT}")
-    print("\n保持此窗口打开。按 Ctrl+C 停止。")
-
+    print("\nKeep this window open. Press Ctrl+C to stop.")
     try:
         while http_thread.is_alive() and https_thread.is_alive() and socks_thread.is_alive() and udp_thread.is_alive():
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n客户端正在退出。")
+        print("\nClient is shutting down.")
     finally:
         event_logger.log("client stop")
         event_logger.close()
-
-
 if __name__ == "__main__":
     main()
