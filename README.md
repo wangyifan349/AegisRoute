@@ -418,37 +418,52 @@ This layout separates proxy responsibilities while still using asynchronous netw
 
 If **AegisRoute** has been useful to you, please consider supporting the project.
 
-Building and maintaining networking software requires a significant amount of time, research, testing, debugging, and long-term maintenance.
-Features such as HTTP, HTTPS CONNECT, SOCKS5, TCP/UDP forwarding, encryption, protocol compatibility,and cross-platform support all require continuous development and refinement.
+Building and maintaining networking software requires a significant amount of time, research, testing, debugging, and long-term maintenance. Features such as HTTP, HTTPS CONNECT, SOCKS5, TCP/UDP forwarding, encryption, protocol compatibility, and cross-platform support all require continuous development and refinement.
 
 AegisRoute is developed as an open-source project, and every contribution helps support future improvements, new features, bug fixes, documentation, testing, and ongoing maintenance.
+
 If you would like to support the project, even the equivalent of a coffee is sincerely appreciated. ☕❤️
+
 ---
+
 ### ⚡ Bitcoin (BTC)
+
 ```text
 bc1qxqfhumpqtnxrznkx9r4xsp8m6zsedtgusjns7p
 ```
+
 ### 🌞 Solana (SOL)
+
 ```text
 B7N4e3KG9zWQBwMrtydS1B9wVBp2w62fAdryZdxAMBiz
 ```
+
 ### 💎 Ethereum (ETH)
+
 ```text
 0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
 ```
+
 ### 🟡 BNB Smart Chain (BNB)
+
 ```text
 0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
 ```
+
 ### 💵 USDT
 
 ```text
 0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
 ```
+
 ---
+
 ⭐ If you enjoy the project, please consider giving the repository a star and sharing it with others.
+
 🙏 Your support, encouragement, and contributions are greatly appreciated and help keep AegisRoute active and evolving.
+
 Thank you for supporting open-source software.
+
 
 ## 📄 License
 
