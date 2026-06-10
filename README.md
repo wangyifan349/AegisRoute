@@ -415,6 +415,36 @@ This layout separates proxy responsibilities while still using asynchronous netw
 
 ---
 
+## ☕ Support AegisRoute
+
+If **AegisRoute** helps you, saves you time, or gives you a useful starting point for your own proxy project, you can support its development with a small donation.
+
+No large contribution is needed — even buying me a coffee is greatly appreciated. ☕
+Your support helps keep the project maintained, improved, and open to everyone. 🚀
+
+---
+### ₿ Bitcoin
+```text
+bc1qxqfhumpqtnxrznkx9r4xsp8m6zsedtgusjns7p
+```
+### 💎 Ethereum
+```text
+0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
+```
+### 🟡 BNB Smart Chain
+```text
+0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
+```
+### 💵 USDT
+```text
+0x2d92f9e4d8ac7effa9cd7cd5eccd364cac7c201b
+```
+---
+⭐ If you like this project, please consider giving it a star on GitHub.
+☕ If you find it useful, buying me a coffee would mean a lot.
+Thank you for supporting open-source work.❤️
+
+
 ## 📄 License
 
 AegisRoute is licensed under the **GNU General Public License version 3 or later**.
