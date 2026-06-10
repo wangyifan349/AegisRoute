@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0
 """
 server.py
-
 AegisRoute interactive encrypted proxy server.
-
 Install dependency:
     pip install cryptography
-
 Run:
     python server.py
 """
-
 import asyncio
 import functools
 import getpass
@@ -29,7 +25,6 @@ from typing import Dict, Optional, TextIO, Tuple
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
 
 TCP_MAGIC = b"PYPX-TCP-1"                  # TCP protocol marker
 UDP_MAGIC = b"PYPX-UDP-1"                  # UDP protocol marker
@@ -57,32 +52,24 @@ class EventLogger:
         self.file_path = file_path          # Log file path
         self.lock = threading.Lock()        # File write lock across threads
         self.file_handle: Optional[TextIO] = None  # Open file handle
-
         if self.enabled:
             self.file_handle = open(self.file_path, "a", encoding="utf-8")  # Append mode
-
     def log(self, message: str) -> None:
         if not self.enabled:
             return
-
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")  # Local timestamp
         line = f"[{timestamp}] {message}\n"            # One log line
-
         with self.lock:
             if self.file_handle is None:
                 return
             self.file_handle.write(line)
             self.file_handle.flush()
-
     def close(self) -> None:
         if self.file_handle is None:
             return
-
         with self.lock:
             self.file_handle.close()
             self.file_handle = None
-
-
 def derive_tcp_key(password: str, salt: bytes) -> bytes:
     base_key = hashlib.sha256(password.encode("utf-8")).digest()  # Stable password hash
     key_deriver = HKDF(                                            # HKDF session key derivation
@@ -93,11 +80,9 @@ def derive_tcp_key(password: str, salt: bytes) -> bytes:
     )
     return key_deriver.derive(base_key)
 
-
 def derive_udp_key(password: str) -> bytes:
     key_text = "pyproxy-udp-key-v1:" + password      # Domain-separated UDP key text
     return hashlib.sha256(key_text.encode("utf-8")).digest()
-
 
 class SecureChannel:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, key: bytes, is_client: bool):
@@ -180,21 +165,16 @@ def udp_decrypt(key: bytes, packet: bytes) -> Tuple[dict, bytes]:
     header = json.loads(plain_packet[header_start:header_end].decode("utf-8"))  # Decode JSON header
     payload = plain_packet[header_end:]                       # Remaining UDP payload
     return header, payload
-
-
 def tune_tcp_writer(writer: asyncio.StreamWriter) -> None:
     socket_object = writer.get_extra_info("socket")           # Raw socket from stream writer
     if socket_object is None:
         return
-
     socket_object.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Reduce latency
     socket_object.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # Enable TCP keepalive
-
 
 async def close_writer(writer: asyncio.StreamWriter) -> None:
     if writer.is_closing():
         return
-
     writer.close()                                            # Start stream close
     await writer.wait_closed()                                # Wait until closed
 
@@ -212,7 +192,6 @@ async def target_to_channel(target_reader: asyncio.StreamReader, channel: Secure
             await channel.send(FRAME_EOF)
             return
         await channel.send(FRAME_DATA, data)
-
 
 async def channel_to_target(channel: SecureChannel, target_writer: asyncio.StreamWriter) -> None:
     while True:
@@ -257,25 +236,20 @@ async def handle_tcp_client(
     target_writer: Optional[asyncio.StreamWriter] = None       # Target stream writer
     client_addr = writer.get_extra_info("peername")           # Client socket address
     tune_tcp_writer(writer)
-
     try:
         channel = await server_handshake(reader, writer, password)
         frame_type, payload = await channel.recv()
-
         if frame_type != FRAME_CONNECT:
             await channel.send(FRAME_ERR, b"expected CONNECT frame")
             return
-
         request = json.loads(payload.decode("utf-8"))          # Target request JSON
         target_host = str(request["host"])                     # Target host name
         target_port = int(request["port"])                     # Target port number
         event_logger.log(f"tcp connect client={client_addr} target={target_host}:{target_port}")
-
         target_reader, target_writer = await asyncio.open_connection(target_host, target_port)
         tune_tcp_writer(target_writer)
         await channel.send(FRAME_OK)
         await relay_tcp(channel, target_reader, target_writer)
-
     except Exception as error:
         event_logger.log(f"tcp error client={client_addr} error={error}")
         if channel is not None:
@@ -364,7 +338,6 @@ class ServerUdpProtocol(asyncio.DatagramProtocol):
         target_port = int(header["port"])                      # Target port number
         session_key = (client_addr, session_id, target_host, target_port)  # Unique session key
         session = self.sessions.get(session_key)               # Existing target socket
-
         if session is None:
             protocol_factory = functools.partial(TargetUdpProtocol, self, session_key)  # Target protocol factory
             target_transport, _ = await self.loop.create_datagram_endpoint(
@@ -390,18 +363,14 @@ class ServerUdpProtocol(asyncio.DatagramProtocol):
             await asyncio.sleep(30)
             current_time = time.time()                         # Current cleanup time
             expired_keys = []                                  # Keys selected for cleanup
-
             for session_key, session in self.sessions.items():
                 idle_seconds = current_time - session.last_seen
                 if idle_seconds > UDP_SESSION_TTL:
                     expired_keys.append(session_key)
-
             for session_key in expired_keys:
                 session = self.sessions.pop(session_key)
                 session.transport.close()
                 self.event_logger.log(f"udp expired client={session.client_addr} target={session.target_host}:{session.target_port}")
-
-
 async def run_udp_server(port: int, password: str, event_logger: EventLogger) -> None:
     event_loop = asyncio.get_running_loop()                    # UDP event loop
     protocol_factory = functools.partial(ServerUdpProtocol, password, event_logger)  # Server protocol factory
@@ -426,22 +395,17 @@ def run_asyncio_thread(name: str, coroutine) -> threading.Thread:
 
 
 def ask_port() -> int:
-    port_text = input("服务器监听端口，例如 8443：").strip()  # User port input
+    port_text = input("Server listen port, for example 8443: ").strip()  # User port input
     if not port_text:
         port_text = "8443"
     return int(port_text)
-
-
 def ask_password() -> str:
-    password = getpass.getpass("通信密码，建议 32 位以上随机字符串：").strip()  # Hidden password input
+    password = getpass.getpass("Communication password; a random string of at least 32 characters is recommended: ").strip()  # Hidden password input
     if not password:
-        raise SystemExit("密码不能为空")
+        raise SystemExit("Password cannot be empty")
     return password
-
-
 def ask_yes_no(prompt_text: str, default_value: bool = False) -> bool:
     default_text = "yes" if default_value else "no"           # Display default answer
-
     while True:
         answer = input(f"{prompt_text} yes/no [{default_text}]：").strip().lower()  # User yes/no input
         if not answer:
@@ -450,37 +414,29 @@ def ask_yes_no(prompt_text: str, default_value: bool = False) -> bool:
             return True
         if answer == "no" or answer == "n":
             return False
-        print("请输入 yes 或 no。")
-
-
+        print("Please enter yes or no.")
 def main() -> None:
     print("AegisRoute Server")
-    print("监听地址固定为 0.0.0.0，TCP 和 UDP 使用同一个端口。")
-
+    print("The listen address is fixed at 0.0.0.0, and TCP and UDP use the same port.")
     port = ask_port()                                         # Server listen port
     password = ask_password()                                 # Shared password
-    save_records = ask_yes_no("是否保留服务器记录到 server.log？", False)  # Log option
+    save_records = ask_yes_no("Keep server logs in server.log?", False)  # Log option
     event_logger = EventLogger(save_records, SERVER_LOG_FILE) # Optional file logger
-
     event_logger.log(f"server start port={port}")
     tcp_thread = run_asyncio_thread("aegisroute-tcp-server", run_tcp_server(port, password, event_logger))  # TCP worker
     udp_thread = run_asyncio_thread("aegisroute-udp-server", run_udp_server(port, password, event_logger))  # UDP worker
-
-    print("\n服务器已启动：")
+    print("\nServer started:")
     print(f"  TCP: 0.0.0.0:{port}")
     print(f"  UDP: 0.0.0.0:{port}")
-    print(f"  记录: {'server.log' if save_records else '不保留'}")
-    print("\n保持此窗口打开。按 Ctrl+C 停止。")
-
+    print(f"  Logs: {'server.log' if save_records else 'not kept'}")
+    print("\nKeep this window open. Press Ctrl+C to stop.")
     try:
         while tcp_thread.is_alive() and udp_thread.is_alive():
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n服务器正在退出。")
+        print("\nServer is shutting down.")
     finally:
         event_logger.log("server stop")
         event_logger.close()
-
-
 if __name__ == "__main__":
     main()
