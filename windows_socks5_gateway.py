@@ -1,45 +1,36 @@
 #!/usr/bin/env python3
 """
 windows_socks5_gateway.py
-
 Windows-compatible proxy gateway using Python standard library only.
-
 Purpose:
     This program provides a local proxy gateway and forwards all outbound traffic
     to one upstream SOCKS5 proxy.
-
-Inbound protocols supported by this program:
-    - HTTP forward proxy
-    - HTTPS through HTTP CONNECT
-    - SOCKS5 TCP CONNECT
-    - SOCKS5 UDP ASSOCIATE
-
+Inbound protocol ports exposed by this program:
+    - HTTP forward proxy: base listen port
+    - HTTPS through HTTP CONNECT: base listen port + 1
+    - SOCKS5 TCP CONNECT: base listen port + 2
+    - SOCKS5 UDP ASSOCIATE: same SOCKS5 control port, base listen port + 2
 Outbound behavior:
     - HTTP traffic is forwarded through upstream SOCKS5 CONNECT.
     - HTTPS CONNECT tunnels are forwarded through upstream SOCKS5 CONNECT.
     - SOCKS5 TCP CONNECT is forwarded through upstream SOCKS5 CONNECT.
     - SOCKS5 UDP ASSOCIATE is forwarded through upstream SOCKS5 UDP ASSOCIATE.
-
 Important limitations:
     - SOCKS5 UDP works only if the upstream SOCKS5 proxy supports UDP ASSOCIATE.
     - SOCKS5 BIND is not implemented.
     - HTTPS is tunneled only; TLS is not decrypted or inspected.
     - This is not a transparent proxy. Client software must explicitly use this proxy.
-    - The default listener binds to 0.0.0.0 and ::. Use firewall rules if needed.
-
+    - The default listeners bind to 127.0.0.1 and ::1 for local-only access.
 Requirements:
     - Windows
     - Python 3.10 or newer
     - No third-party Python packages are required.
-
 Run:
     python windows_socks5_gateway.py
-
 Configuration:
     Edit UPSTREAM_SOCKS5_HOST, UPSTREAM_SOCKS5_PORT, UPSTREAM_SOCKS5_USERNAME,
     and UPSTREAM_SOCKS5_PASSWORD near the top of this file.
 """
-
 import asyncio
 import logging
 import socket
@@ -47,12 +38,21 @@ import struct
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+# Base port entered at startup.
+# If you press Enter, the program listens as follows:
+#   HTTP forward proxy     -> 127.0.0.1:8080
+#   HTTPS CONNECT proxy    -> 127.0.0.1:8081
+#   SOCKS5 TCP/UDP control -> 127.0.0.1:8082
 DEFAULT_LISTEN_PORT = 8080
+# All outbound traffic is sent to this upstream SOCKS5 server.
+# For Tor Browser on Windows, the SOCKS5 port is usually 127.0.0.1:9150.
+# For Tor Expert Bundle / system Tor, it may be 127.0.0.1:9050 instead.
 UPSTREAM_SOCKS5_HOST = "127.0.0.1"
-UPSTREAM_SOCKS5_PORT = 1080
+UPSTREAM_SOCKS5_PORT = 9150
 UPSTREAM_SOCKS5_USERNAME = ""
 UPSTREAM_SOCKS5_PASSWORD = ""
-
+# Network buffer and timeout settings.
+# BUFFER_SIZE controls each relay read size. STREAM_LIMIT/HEADER_LIMIT protect memory use.
 BUFFER_SIZE = 64 * 1024
 STREAM_LIMIT = 256 * 1024
 HEADER_LIMIT = 64 * 1024
@@ -64,6 +64,7 @@ LISTEN_BACKLOG = 8192
 TCP_KEEPALIVE_IDLE_MS = 60_000
 TCP_KEEPALIVE_INTERVAL_MS = 20_000
 
+# SOCKS5 protocol constants. These values come from RFC 1928 / RFC 1929.
 SOCKS_VERSION = 0x05
 SOCKS_METHOD_NO_AUTH = 0x00
 SOCKS_METHOD_USERNAME_PASSWORD = 0x02
@@ -80,24 +81,45 @@ SOCKS_REPLY_HOST_UNREACHABLE = 0x04
 SOCKS_REPLY_CONNECTION_REFUSED = 0x05
 SOCKS_REPLY_COMMAND_NOT_SUPPORTED = 0x07
 
+# Hop-by-hop HTTP headers must not be blindly forwarded by proxies.
+# They describe only the current TCP connection, not the final destination.
 HTTP_HOP_BY_HOP_HEADERS = {
     b"connection", b"proxy-connection", b"keep-alive", b"proxy-authenticate",
     b"proxy-authorization", b"te", b"trailer", b"upgrade",
 }
 
+# Global connection limiter initialized in run_server().
+# This prevents one process from accepting unlimited simultaneous clients.
 connection_semaphore: asyncio.Semaphore
 
+# Parsed HTTP header representation. raw_lines preserves original bytes for forwarding,
+# while values provides lowercase lookup such as b"host" or b"content-length".
 @dataclass
 class HttpHeaders:
     raw_lines: list[bytes]
     values: dict[bytes, list[bytes]]
 
+# Runtime listener configuration. The user enters only base_port;
+# derived properties split HTTP / HTTPS CONNECT / SOCKS5 onto separate ports.
 @dataclass
 class ServerConfig:
-    listen_port: int
+    base_port: int
     max_connections: int = MAX_CONCURRENT_CONNECTIONS
     backlog: int = LISTEN_BACKLOG
 
+    @property
+    def http_port(self) -> int:
+        return self.base_port
+
+    @property
+    def https_port(self) -> int:
+        return self.base_port + 1
+
+    @property
+    def socks5_port(self) -> int:
+        return self.base_port + 2
+
+# Parsed SOCKS5 server reply. bind_host/bind_port are returned by the upstream proxy.
 @dataclass
 class Socks5Reply:
     reply_code: int
@@ -105,17 +127,27 @@ class Socks5Reply:
     bind_port: int
 
 def configure_tcp_socket(tcp_socket: socket.socket | None) -> None:
-    """Enable TCP_NODELAY and TCP keepalive on Windows-supported sockets."""
+    """Enable TCP_NODELAY and TCP keepalive on supported TCP sockets.
+
+    On Windows asyncio ProactorEventLoop, get_extra_info("socket") may return
+    a TransportSocket wrapper. It supports setsockopt(), but not always ioctl().
+    Therefore we check for ioctl explicitly instead of wrapping the whole function
+    in broad try/except blocks.
+    """
     if tcp_socket is None:
         return
     tcp_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     tcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    if hasattr(socket, "SIO_KEEPALIVE_VALS"):
+    if hasattr(socket, "SIO_KEEPALIVE_VALS") and hasattr(tcp_socket, "ioctl"):
         keepalive_values = struct.pack("III", 1, TCP_KEEPALIVE_IDLE_MS, TCP_KEEPALIVE_INTERVAL_MS)
         tcp_socket.ioctl(socket.SIO_KEEPALIVE_VALS, keepalive_values)
 
 def create_listen_socket(address_family: int, host: str, port: int, backlog: int) -> socket.socket:
-    """Create an IPv4 or IPv6 TCP listening socket."""
+    """Create one non-blocking TCP listening socket.
+
+    The server uses explicit IPv4 and IPv6 sockets so that localhost behavior is
+    predictable on Windows. We bind to loopback only for safety.
+    """
     listen_socket = socket.socket(address_family, socket.SOCK_STREAM)
     listen_socket.setblocking(False)
     if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -129,7 +161,11 @@ def create_listen_socket(address_family: int, host: str, port: int, backlog: int
     return listen_socket
 
 def split_host_port(authority: str, default_port: int) -> tuple[str, int]:
-    """Parse host:port, [ipv6]:port, or plain host."""
+    """Parse host:port, [ipv6]:port, or plain host.
+
+    HTTP Host and CONNECT targets may omit the port. In that case callers pass
+    80 for normal HTTP and 443 for HTTPS CONNECT.
+    """
     if authority.startswith("["):
         closing_bracket_index = authority.find("]")
         if closing_bracket_index < 0:
@@ -144,7 +180,12 @@ def split_host_port(authority: str, default_port: int) -> tuple[str, int]:
     return authority, default_port
 
 def encode_socks5_address(address: str, port: int) -> bytes:
-    """Encode IPv4, IPv6, or domain name into SOCKS5 address format."""
+    """Encode IPv4, IPv6, or domain name into SOCKS5 address format.
+
+    Important for Tor: when address is a hostname, this function sends it as
+    SOCKS5 ATYP_DOMAIN instead of resolving it locally. That lets the upstream
+    SOCKS5 proxy perform DNS resolution and reduces DNS-leak risk.
+    """
     try:
         return bytes([SOCKS_ATYP_IPV4]) + socket.inet_pton(socket.AF_INET, address) + struct.pack("!H", port)
     except OSError:
@@ -217,7 +258,12 @@ def decode_socks5_udp_datagram(datagram: bytes) -> tuple[str, int, bytes] | None
     return host, port, datagram[offset:]
 
 async def open_upstream_tcp_connection() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """Connect to the upstream SOCKS5 server and complete authentication."""
+    """Connect to the upstream SOCKS5 server and complete method negotiation.
+
+    This function only establishes the SOCKS5 control connection and performs
+    optional username/password authentication. It does not yet connect to the
+    final destination; connect_remote_via_upstream() sends the CONNECT command.
+    """
     reader, writer = await asyncio.wait_for(
         asyncio.open_connection(UPSTREAM_SOCKS5_HOST, UPSTREAM_SOCKS5_PORT, limit=STREAM_LIMIT),
         timeout=CONNECT_TIMEOUT,
@@ -255,7 +301,11 @@ async def open_upstream_tcp_connection() -> tuple[asyncio.StreamReader, asyncio.
     raise ConnectionError("upstream SOCKS5 rejected all authentication methods")
 
 async def connect_remote_via_upstream(host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, Socks5Reply]:
-    """Create a SOCKS5 CONNECT through the upstream SOCKS5 server."""
+    """Ask the upstream SOCKS5 proxy to open a TCP connection to host:port.
+
+    HTTP forwarding, HTTPS CONNECT, and SOCKS5 TCP CONNECT all eventually use
+    this function, so every TCP outbound path goes through the same upstream.
+    """
     reader, writer = await open_upstream_tcp_connection()
     writer.write(bytes([SOCKS_VERSION, SOCKS_CMD_CONNECT, 0x00]) + encode_socks5_address(host, port))
     await writer.drain()
@@ -267,7 +317,12 @@ async def connect_remote_via_upstream(host: str, port: int) -> tuple[asyncio.Str
     return reader, writer, reply
 
 async def create_upstream_udp_association() -> tuple[asyncio.StreamReader, asyncio.StreamWriter, tuple[str, int]]:
-    """Create a SOCKS5 UDP ASSOCIATE session with the upstream SOCKS5 server."""
+    """Create a SOCKS5 UDP ASSOCIATE session with the upstream SOCKS5 server.
+
+    The TCP control connection must stay open for the lifetime of the UDP relay.
+    Many SOCKS5 servers, including Tor SOCKS in common configurations, do not
+    provide general-purpose UDP forwarding. In that case this will fail cleanly.
+    """
     reader, writer = await open_upstream_tcp_connection()
     writer.write(bytes([SOCKS_VERSION, SOCKS_CMD_UDP_ASSOCIATE, 0x00]) + encode_socks5_address("0.0.0.0", 0))
     await writer.drain()
@@ -289,7 +344,11 @@ async def resolve_udp_endpoint(host: str, port: int) -> tuple[int, tuple]:
     return family, socket_address
 
 async def relay_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    """Copy bytes from one stream to another with backpressure."""
+    """Copy bytes from one TCP stream to another with backpressure.
+
+    Used for CONNECT tunnels and SOCKS5 TCP tunnels. It does not inspect or
+    modify payload bytes, so HTTPS TLS data remains encrypted end-to-end.
+    """
     try:
         while True:
             data = await asyncio.wait_for(reader.read(BUFFER_SIZE), timeout=IDLE_TIMEOUT)
@@ -320,7 +379,11 @@ async def relay_tcp_tunnel(
     )
 
 def parse_http_headers(header_lines: list[bytes]) -> HttpHeaders:
-    """Parse HTTP headers into raw and lookup forms."""
+    """Parse HTTP headers into raw and lookup forms.
+
+    Raw header bytes are kept because a proxy should avoid unnecessarily
+    rewriting end-to-end headers. The lookup dict is only for routing decisions.
+    """
     values: dict[bytes, list[bytes]] = {}
     for line in header_lines:
         name, separator, value = line.partition(b":")
@@ -460,8 +523,22 @@ def write_filtered_response_headers(
     client_writer.write(b"Connection: keep-alive\r\n" if client_keep_alive else b"Connection: close\r\n")
     client_writer.write(b"\r\n")
 
-async def handle_http_client(first_byte: bytes, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-    """Handle HTTP forward proxy and HTTPS CONNECT traffic."""
+async def handle_http_client(
+    first_byte: bytes,
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    allow_forward_proxy: bool,
+    allow_connect_tunnel: bool,
+) -> None:
+    """Handle HTTP forward proxy and/or HTTPS CONNECT traffic.
+
+    This same parser is used for two different listener ports:
+      - HTTP port: allows normal forward-proxy requests, rejects CONNECT.
+      - HTTPS port: allows CONNECT tunnels, rejects normal HTTP forwarding.
+
+    Splitting the ports avoids auto-detecting HTTP vs CONNECT on one port, while
+    still sharing almost all parsing and forwarding code.
+    """
     current_first_byte = first_byte
     while True:
         request_line = current_first_byte + await client_reader.readline()
@@ -477,6 +554,10 @@ async def handle_http_client(first_byte: bytes, client_reader: asyncio.StreamRea
         upper_method = method.upper()
         client_keep_alive = not http_connection_should_close(http_version, request_headers)
         if upper_method == "CONNECT":
+            if not allow_connect_tunnel:
+                client_writer.write(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\nUse the HTTPS CONNECT port for CONNECT requests.\r\n")
+                await client_writer.drain()
+                return
             destination_host, destination_port = split_host_port(request_target, 443)
             try:
                 upstream_reader, upstream_writer, _ = await connect_remote_via_upstream(destination_host, destination_port)
@@ -487,6 +568,10 @@ async def handle_http_client(first_byte: bytes, client_reader: asyncio.StreamRea
             client_writer.write(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: windows-socks5-gateway\r\n\r\n")
             await client_writer.drain()
             await relay_tcp_tunnel(client_reader, client_writer, upstream_reader, upstream_writer)
+            return
+        if not allow_forward_proxy:
+            client_writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nThis port accepts HTTPS CONNECT requests only.\r\n")
+            await client_writer.drain()
             return
         parsed_url = urlsplit(request_target)
         if parsed_url.scheme and parsed_url.hostname:
@@ -549,7 +634,14 @@ async def handle_http_client(first_byte: bytes, client_reader: asyncio.StreamRea
             return
 
 class Socks5UdpAssociation:
-    """Map one inbound SOCKS5 UDP association to one upstream SOCKS5 UDP association."""
+    """Map one inbound SOCKS5 UDP association to one upstream SOCKS5 UDP association.
+
+    SOCKS5 UDP is not a plain fixed UDP port. A client first opens a SOCKS5 TCP
+    control connection to the SOCKS5 listener, sends UDP ASSOCIATE, and receives
+    a server-selected UDP relay port. That is why SOCKS5 TCP and SOCKS5 UDP share
+    the same user-facing SOCKS5 control port, while actual UDP relay sockets are
+    allocated dynamically per association.
+    """
     def __init__(
         self,
         control_reader: asyncio.StreamReader,
@@ -574,6 +666,7 @@ class Socks5UdpAssociation:
         self.upstream_udp_endpoint: tuple | None = None
 
     async def start(self) -> None:
+        """Start the local UDP relay and keep it alive while TCP control stays open."""
         try:
             await self.prepare_client_udp_socket()
             await self.prepare_upstream_udp_association()
@@ -605,6 +698,7 @@ class Socks5UdpAssociation:
         self.close_sockets()
 
     async def prepare_client_udp_socket(self) -> None:
+        """Create the UDP socket that the local SOCKS5 client will send packets to."""
         client_family = socket.AF_INET6 if ":" in self.client_tcp_ip else socket.AF_INET
         bind_host = "::" if client_family == socket.AF_INET6 else "0.0.0.0"
         self.client_udp_socket = socket.socket(client_family, socket.SOCK_DGRAM)
@@ -614,6 +708,7 @@ class Socks5UdpAssociation:
         self.client_udp_socket.bind((bind_host, 0))
 
     async def prepare_upstream_udp_association(self) -> None:
+        """Create the upstream SOCKS5 UDP relay and local socket used to reach it."""
         self.upstream_control_reader, self.upstream_control_writer, upstream_udp_endpoint = await create_upstream_udp_association()
         upstream_family, upstream_socket_address = await resolve_udp_endpoint(upstream_udp_endpoint[0], upstream_udp_endpoint[1])
         self.upstream_udp_endpoint = upstream_socket_address
@@ -626,6 +721,7 @@ class Socks5UdpAssociation:
             self.upstream_udp_socket.bind(("0.0.0.0", 0))
 
     async def client_to_upstream_loop(self) -> None:
+        """Forward validated SOCKS5 UDP datagrams from the client to upstream."""
         assert self.client_udp_socket is not None
         assert self.upstream_udp_socket is not None
         assert self.upstream_udp_endpoint is not None
@@ -643,6 +739,7 @@ class Socks5UdpAssociation:
             await self.loop.sock_sendto(self.upstream_udp_socket, datagram, self.upstream_udp_endpoint)
 
     async def upstream_to_client_loop(self) -> None:
+        """Forward UDP replies from upstream back to the associated local client."""
         assert self.client_udp_socket is not None
         assert self.upstream_udp_socket is not None
         while True:
@@ -660,7 +757,11 @@ class Socks5UdpAssociation:
             self.upstream_control_writer.close()
 
 async def handle_socks5_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-    """Handle inbound SOCKS5 TCP CONNECT and UDP ASSOCIATE."""
+    """Handle inbound SOCKS5 TCP CONNECT and UDP ASSOCIATE.
+
+    The inbound SOCKS5 listener does not require authentication. Keep the server
+    bound to 127.0.0.1/::1 unless you intentionally want other machines to use it.
+    """
     method_count = (await client_reader.readexactly(1))[0]
     methods = await client_reader.readexactly(method_count)
     if SOCKS_METHOD_NO_AUTH not in methods:
@@ -699,18 +800,44 @@ async def handle_socks5_client(client_reader: asyncio.StreamReader, client_write
     client_writer.write(build_socks5_reply(SOCKS_REPLY_COMMAND_NOT_SUPPORTED))
     await client_writer.drain()
 
-async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-    """Detect inbound protocol and dispatch to HTTP or SOCKS5 handler."""
+async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, inbound_mode: str) -> None:
+    """Dispatch one inbound connection according to the listener it arrived on.
+
+    Unlike the original single-port version, this function no longer needs to
+    guess all protocols on the same port. The selected listener mode determines
+    what the connection is allowed to do.
+    """
     acquired_connection_slot = False
     try:
         await connection_semaphore.acquire()
         acquired_connection_slot = True
         configure_tcp_socket(client_writer.get_extra_info("socket"))
         first_byte = await asyncio.wait_for(client_reader.readexactly(1), timeout=HANDSHAKE_TIMEOUT)
-        if first_byte == bytes([SOCKS_VERSION]):
+        if inbound_mode == "socks5":
+            if first_byte != bytes([SOCKS_VERSION]):
+                return
             await handle_socks5_client(client_reader, client_writer)
-        else:
-            await handle_http_client(first_byte, client_reader, client_writer)
+            return
+        if first_byte == bytes([SOCKS_VERSION]):
+            return
+        if inbound_mode == "http":
+            await handle_http_client(
+                first_byte,
+                client_reader,
+                client_writer,
+                allow_forward_proxy=True,
+                allow_connect_tunnel=False,
+            )
+            return
+        if inbound_mode == "https":
+            await handle_http_client(
+                first_byte,
+                client_reader,
+                client_writer,
+                allow_forward_proxy=False,
+                allow_connect_tunnel=True,
+            )
+            return
     except (asyncio.IncompleteReadError, ConnectionError, TimeoutError, OSError, ValueError) as error:
         logging.debug("client closed or protocol error: %s", error)
     finally:
@@ -722,44 +849,77 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         except Exception:
             pass
 
+async def start_tcp_listener(port: int, inbound_mode: str, backlog: int) -> list[asyncio.AbstractServer]:
+    """Start local IPv4 and IPv6 TCP listeners for one inbound mode.
+
+    The listeners intentionally bind to loopback addresses only:
+      - 127.0.0.1 for IPv4
+      - ::1 for IPv6
+    This prevents exposing a Tor gateway to the LAN by accident.
+    """
+    servers = []
+    ipv4_socket = create_listen_socket(socket.AF_INET, "127.0.0.1", port, backlog)
+    ipv4_server = await asyncio.start_server(
+        lambda reader, writer: handle_client(reader, writer, inbound_mode),
+        sock=ipv4_socket,
+        limit=STREAM_LIMIT,
+        start_serving=True,
+    )
+    servers.append(ipv4_server)
+    try:
+        ipv6_socket = create_listen_socket(socket.AF_INET6, "::1", port, backlog)
+        ipv6_server = await asyncio.start_server(
+            lambda reader, writer: handle_client(reader, writer, inbound_mode),
+            sock=ipv6_socket,
+            limit=STREAM_LIMIT,
+            start_serving=True,
+        )
+        servers.append(ipv6_server)
+        logging.info("%s listening on 127.0.0.1:%s and [::1]:%s", inbound_mode.upper(), port, port)
+    except OSError as error:
+        logging.warning("%s IPv6 listener disabled: %s", inbound_mode.upper(), error)
+        logging.info("%s listening on 127.0.0.1:%s", inbound_mode.upper(), port)
+    return servers
+
 async def run_server(config: ServerConfig) -> None:
-    """Start IPv4 and IPv6 listeners."""
+    """Start separate local listeners for HTTP, HTTPS CONNECT, and SOCKS5.
+
+    Port layout:
+      base_port     -> HTTP forward proxy
+      base_port + 1 -> HTTPS CONNECT proxy
+      base_port + 2 -> SOCKS5 TCP CONNECT and UDP ASSOCIATE control
+    """
     global connection_semaphore
     connection_semaphore = asyncio.Semaphore(config.max_connections)
     servers = []
-    ipv4_socket = create_listen_socket(socket.AF_INET, "0.0.0.0", config.listen_port, config.backlog)
-    ipv4_server = await asyncio.start_server(handle_client, sock=ipv4_socket, limit=STREAM_LIMIT, start_serving=True)
-    servers.append(ipv4_server)
-    try:
-        ipv6_socket = create_listen_socket(socket.AF_INET6, "::", config.listen_port, config.backlog)
-        ipv6_server = await asyncio.start_server(handle_client, sock=ipv6_socket, limit=STREAM_LIMIT, start_serving=True)
-        servers.append(ipv6_server)
-        logging.info("listening on 0.0.0.0:%s and [::]:%s", config.listen_port, config.listen_port)
-    except OSError as error:
-        logging.warning("IPv6 listener disabled: %s", error)
-        logging.info("listening on 0.0.0.0:%s", config.listen_port)
+    servers.extend(await start_tcp_listener(config.http_port, "http", config.backlog))
+    servers.extend(await start_tcp_listener(config.https_port, "https", config.backlog))
+    servers.extend(await start_tcp_listener(config.socks5_port, "socks5", config.backlog))
+    logging.info("ports: HTTP=%s, HTTPS_CONNECT=%s, SOCKS5_TCP_AND_UDP=%s", config.http_port, config.https_port, config.socks5_port)
     logging.info("upstream SOCKS5 = %s:%s, max_connections=%s", UPSTREAM_SOCKS5_HOST, UPSTREAM_SOCKS5_PORT, config.max_connections)
     await asyncio.gather(*(server.serve_forever() for server in servers))
 
 def ask_listen_port() -> int:
-    """Ask for local listen port."""
-    raw_value = input(f"Enter local listen port [{DEFAULT_LISTEN_PORT}]: ").strip()
+    """Ask for the base local listen port and reserve base+1/base+2.
+
+    The maximum accepted base port is 65533 because the program also needs
+    base_port + 1 and base_port + 2.
+    """
+    raw_value = input(f"Enter base local listen port [{DEFAULT_LISTEN_PORT}]: ").strip()
     if not raw_value:
         return DEFAULT_LISTEN_PORT
     port = int(raw_value)
-    if not 1 <= port <= 65535:
-        raise ValueError("port must be between 1 and 65535")
+    if not 1 <= port <= 65533:
+        raise ValueError("base port must be between 1 and 65533")
     return port
-
 def main() -> None:
     """Program entry point."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    listen_port = ask_listen_port()
+    base_port = ask_listen_port()
     logging.info("starting Windows SOCKS5 gateway")
-    logging.info("inbound: HTTP, HTTPS CONNECT, SOCKS5 TCP, SOCKS5 UDP")
+    logging.info("inbound: HTTP=%s, HTTPS CONNECT=%s, SOCKS5 TCP/UDP=%s", base_port, base_port + 1, base_port + 2)
     logging.info("outbound: upstream SOCKS5 only")
-    config = ServerConfig(listen_port=listen_port)
+    config = ServerConfig(base_port=base_port)
     asyncio.run(run_server(config))
 
-if __name__ == "__main__":
-    main()
+main()
