@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-windows_socks5_gateway.py
+windows_socks5_gateway_v2.py
 Windows-compatible proxy gateway using Python standard library only.
+
+v2 minimal changes:
+    - Added __main__ guard so importing this file does not auto-start the server.
+    - Removed Proxy-Agent from local HTTP CONNECT success response.
+    - Added filtering for common proxy / forwarding disclosure headers.
+    - Added filtering for dynamic hop-by-hop headers named by the Connection header.
 Purpose:
     This program provides a local proxy gateway and forwards all outbound traffic
     to one upstream SOCKS5 proxy.
@@ -86,6 +92,10 @@ SOCKS_REPLY_COMMAND_NOT_SUPPORTED = 0x07
 HTTP_HOP_BY_HOP_HEADERS = {
     b"connection", b"proxy-connection", b"keep-alive", b"proxy-authenticate",
     b"proxy-authorization", b"te", b"trailer", b"upgrade",
+
+    # Privacy hardening: remove common proxy / forwarding disclosure headers.
+    b"via", b"forwarded", b"x-forwarded-for", b"x-forwarded-host",
+    b"x-forwarded-proto", b"x-real-ip", b"client-ip",
 }
 
 # Global connection limiter initialized in run_server().
@@ -397,6 +407,16 @@ def get_http_header(headers: HttpHeaders, name: bytes) -> bytes | None:
     values = headers.values.get(name.lower())
     return values[-1] if values else None
 
+def get_connection_header_tokens(headers: HttpHeaders) -> set[bytes]:
+    """Return header names nominated by Connection headers."""
+    tokens: set[bytes] = set()
+    for value in headers.values.get(b"connection", []):
+        for token in value.split(b","):
+            token = token.strip().lower()
+            if token:
+                tokens.add(token)
+    return tokens
+
 def is_chunked_transfer(headers: HttpHeaders) -> bool:
     """Return True when Transfer-Encoding contains chunked."""
     transfer_encoding = get_http_header(headers, b"transfer-encoding")
@@ -496,9 +516,10 @@ async def stream_http_response_body(
 def write_filtered_request_headers(upstream_writer: asyncio.StreamWriter, headers: HttpHeaders, destination_host: str) -> None:
     """Forward end-to-end request headers to the upstream connection."""
     has_host_header = False
+    hop_by_hop_headers = HTTP_HOP_BY_HOP_HEADERS | get_connection_header_tokens(headers)
     for line in headers.raw_lines:
         name = line.partition(b":")[0].strip().lower()
-        if name in HTTP_HOP_BY_HOP_HEADERS:
+        if name in hop_by_hop_headers:
             continue
         if name == b"host":
             has_host_header = True
@@ -514,10 +535,11 @@ def write_filtered_response_headers(
     client_keep_alive: bool,
 ) -> None:
     """Forward end-to-end response headers to the client."""
+    hop_by_hop_headers = HTTP_HOP_BY_HOP_HEADERS | get_connection_header_tokens(headers)
     client_writer.write(status_line)
     for line in headers.raw_lines:
         name = line.partition(b":")[0].strip().lower()
-        if name in HTTP_HOP_BY_HOP_HEADERS:
+        if name in hop_by_hop_headers:
             continue
         client_writer.write(line)
     client_writer.write(b"Connection: keep-alive\r\n" if client_keep_alive else b"Connection: close\r\n")
@@ -565,7 +587,7 @@ async def handle_http_client(
                 client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                 await client_writer.drain()
                 return
-            client_writer.write(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: windows-socks5-gateway\r\n\r\n")
+            client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             await client_writer.drain()
             await relay_tcp_tunnel(client_reader, client_writer, upstream_reader, upstream_writer)
             return
@@ -922,4 +944,5 @@ def main() -> None:
     config = ServerConfig(base_port=base_port)
     asyncio.run(run_server(config))
 
-main()
+if __name__ == "__main__":
+    main()
