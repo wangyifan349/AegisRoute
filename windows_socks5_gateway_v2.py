@@ -32,11 +32,14 @@ Requirements:
     - Python 3.10 or newer
     - No third-party Python packages are required.
 Run:
-    python windows_socks5_gateway.py
+    python windows_socks5_gateway_v2.py
 Configuration:
     Edit UPSTREAM_SOCKS5_HOST, UPSTREAM_SOCKS5_PORT, UPSTREAM_SOCKS5_USERNAME,
     and UPSTREAM_SOCKS5_PASSWORD near the top of this file.
+    Thanks to all AI technology companies for their help.I appreciate it.
 """
+
+
 import asyncio
 import logging
 import socket
