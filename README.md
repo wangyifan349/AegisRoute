@@ -4,8 +4,9 @@
 
 The project is designed to be easy to read, easy to run, and easy to modify. The server is contained in `server.py`, the client is contained in `client.py`, and both programs ask for their runtime settings interactively. The client does **not** save the server address, server port, or shared password to a local configuration file.
 
-AegisRoute is licensed under the **GNU General Public License v3.0 or later**.
+AegisRoute is licensed under the **GNU Affero General Public License v3.0 only (AGPL-3.0-only)**..
 
+SPDX-License-Identifier: AGPL-3.0-only
 ---
 
 ## ✨ Highlights
@@ -467,9 +468,9 @@ Thank you for supporting open-source software.
 
 ## 📄 License
 
-This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
+This project is licensed under the GNU Affero General Public License v3.0 only (AGPL-3.0-only).
 
 See the `LICENSE` file for the full license text.
 
 ```text
-SPDX-License-Identifier: GPL-3.0
+SPDX-License-Identifier: AGPL-3.0-only
