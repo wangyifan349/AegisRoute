@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """
 AegisRoute Client
-Copyright (C) 2026
+Copyright (C) 2026  WangYiFan
 This file is part of AegisRoute.
 AegisRoute is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License version 3 as published by the
